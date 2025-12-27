@@ -108,40 +108,91 @@ const crawler = new PuppeteerCrawler({
             // Wait for content to load
             await page.waitForTimeout(2000);
             
-            // Extract article links
+            // Debug: Log the page title and some content
+            const pageInfo = await page.evaluate(() => ({
+                title: document.title,
+                url: window.location.href,
+                bodyText: document.body.innerText.substring(0, 500)
+            }));
+            console.log(`   Page title: ${pageInfo.title}`);
+            console.log(`   Page URL: ${pageInfo.url}`);
+            console.log(`   Page preview: ${pageInfo.bodyText.substring(0, 200)}...`);
+            
+            // Debug: Count all links on page
+            const allLinks = await page.evaluate(() => {
+                const links = Array.from(document.querySelectorAll('a'));
+                return {
+                    total: links.length,
+                    hrefs: links.slice(0, 10).map(a => ({
+                        href: a.href,
+                        text: a.textContent.trim().substring(0, 50)
+                    }))
+                };
+            });
+            console.log(`   Total links on page: ${allLinks.total}`);
+            console.log(`   First 10 links:`, JSON.stringify(allLinks.hrefs, null, 2));
+            
+            // Extract article links with multiple strategies
             const articleLinks = await page.evaluate(() => {
                 const links = [];
-                // Try multiple selectors for article links
-                const selectors = [
-                    'a[href*="Content"]',
-                    'a[href*="aspx"]',
-                    '.article-link',
-                    'a'
-                ];
                 
-                for (const selector of selectors) {
-                    const elements = document.querySelectorAll(selector);
-                    for (const link of elements) {
-                        const href = link.href;
-                        const text = link.textContent.trim();
+                // Strategy 1: Look for any links with article-like text
+                const allLinks = document.querySelectorAll('a');
+                for (const link of allLinks) {
+                    const href = link.href;
+                    const text = link.textContent.trim();
+                    
+                    // Look for links that might be articles
+                    if (href && text.length > 15) {
+                        // Check if it's likely an article
+                        const isArticle = 
+                            href.includes('/Content/') ||
+                            href.includes('/Content_Premium/') ||
+                            href.includes('.aspx') ||
+                            href.includes('Article') ||
+                            href.includes('article') ||
+                            text.match(/\d{1,2}\/\d{1,2}\/\d{2,4}/) || // Has a date
+                            text.length > 30; // Long text = likely article title
                         
-                        // Filter for article links
-                        if (href && 
-                            (href.includes('/Content/') || 
-                             href.includes('/Content_Premium/')) && 
-                            text.length > 10) {
+                        if (isArticle) {
                             links.push({
                                 url: href,
                                 title: text
                             });
                         }
                     }
-                    if (links.length > 0) break;
                 }
-                return links;
+                
+                // Remove duplicates
+                const unique = [];
+                const seen = new Set();
+                for (const link of links) {
+                    if (!seen.has(link.url)) {
+                        seen.add(link.url);
+                        unique.push(link);
+                    }
+                }
+                
+                return unique;
             });
             
             console.log(`   Found ${articleLinks.length} potential article links`);
+            
+            // Debug: Show first few article links found
+            if (articleLinks.length > 0) {
+                console.log(`   Sample articles found:`);
+                articleLinks.slice(0, 3).forEach((link, i) => {
+                    console.log(`     ${i + 1}. ${link.title.substring(0, 60)}...`);
+                    console.log(`        URL: ${link.url}`);
+                });
+            } else {
+                console.log(`   ⚠️  No article links found. This could mean:`);
+                console.log(`      1. Page structure is different than expected`);
+                console.log(`      2. Subscription doesn't have access to articles`);
+                console.log(`      3. Wrong page loaded`);
+                console.log(`   Please check if you can manually access articles when logged in.`);
+            }
+            
             articlesFound += articleLinks.length;
             
             // Enqueue articles (limit to maxArticles)
@@ -166,6 +217,30 @@ const crawler = new PuppeteerCrawler({
             // Wait for content
             await page.waitForTimeout(1500);
             
+            // Debug: Show what's on the article page
+            const pageDebug = await page.evaluate(() => {
+                return {
+                    title: document.title,
+                    h1: document.querySelector('h1')?.innerText || 'No H1 found',
+                    bodyLength: document.body.innerText.length,
+                    bodyPreview: document.body.innerText.substring(0, 300),
+                    mainSelectors: {
+                        hasArticleContent: !!document.querySelector('.article-content'),
+                        hasArticle: !!document.querySelector('article'),
+                        hasContentId: !!document.querySelector('[id*="Content"]'),
+                        hasContent: !!document.querySelector('.content'),
+                        hasMain: !!document.querySelector('main'),
+                        hasContentPlaceHolder: !!document.querySelector('#ContentPlaceHolder1')
+                    }
+                };
+            });
+            
+            console.log(`   Page title: ${pageDebug.title}`);
+            console.log(`   H1: ${pageDebug.h1}`);
+            console.log(`   Body text length: ${pageDebug.bodyLength} chars`);
+            console.log(`   Body preview: ${pageDebug.bodyPreview.substring(0, 150)}...`);
+            console.log(`   Selector check:`, pageDebug.mainSelectors);
+            
             const article = await page.evaluate(() => {
                 // Try multiple selectors for different content structures
                 const getContent = () => {
@@ -175,16 +250,36 @@ const crawler = new PuppeteerCrawler({
                         '[id*="Content"]',
                         '.content',
                         'main',
-                        '#ContentPlaceHolder1'
+                        '#ContentPlaceHolder1',
+                        '[class*="article"]',
+                        '[class*="content"]',
+                        'div[id*="article"]',
+                        'div[class*="body"]',
+                        '.post-content',
+                        '.entry-content'
                     ];
                     
+                    console.log('Trying content selectors...');
                     for (const selector of selectors) {
                         const element = document.querySelector(selector);
-                        if (element && element.innerText.length > 100) {
-                            return element.innerText;
+                        if (element) {
+                            const text = element.innerText;
+                            console.log(`  ✓ Found with selector: ${selector} (${text.length} chars)`);
+                            if (text.length > 100) {
+                                return text;
+                            }
+                        } else {
+                            console.log(`  ✗ Not found: ${selector}`);
                         }
                     }
-                    return document.body.innerText;
+                    
+                    // Fallback: Get all text content from body, excluding nav/footer
+                    console.log('  Fallback: Using body text');
+                    // Remove navigation, headers, footers
+                    const clonedBody = document.body.cloneNode(true);
+                    const elementsToRemove = clonedBody.querySelectorAll('nav, header, footer, script, style, [role="navigation"], [role="banner"]');
+                    elementsToRemove.forEach(el => el.remove());
+                    return clonedBody.innerText || document.body.innerText;
                 };
                 
                 return {
@@ -192,17 +287,27 @@ const crawler = new PuppeteerCrawler({
                            document.querySelector('.title')?.innerText ||
                            document.querySelector('title')?.innerText,
                     author: document.querySelector('.author')?.innerText ||
-                            document.querySelector('[class*="author"]')?.innerText,
+                            document.querySelector('[class*="author"]')?.innerText ||
+                            document.querySelector('.byline')?.innerText,
                     date: document.querySelector('.date')?.innerText ||
                           document.querySelector('[class*="date"]')?.innerText ||
-                          document.querySelector('.published')?.innerText,
+                          document.querySelector('.published')?.innerText ||
+                          document.querySelector('time')?.innerText,
                     category: document.querySelector('.category')?.innerText ||
-                              document.querySelector('[class*="category"]')?.innerText,
+                              document.querySelector('[class*="category"]')?.innerText ||
+                              document.querySelector('.topic')?.innerText,
                     content: getContent(),
                     url: window.location.href,
                     htmlLength: document.body.innerHTML.length
                 };
             });
+            
+            console.log(`   Extracted content length: ${article.content?.length || 0} chars`);
+            if (article.content?.length > 0) {
+                console.log(`   Content preview: ${article.content.substring(0, 100)}...`);
+            } else {
+                console.log(`   ⚠️  WARNING: Content is empty!`);
+            }
             
             // Save to dataset
             await Actor.pushData({
