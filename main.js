@@ -14,84 +14,96 @@ const {
 console.log('🚀 Starting Bradford Tax Institute Scraper');
 console.log(`📊 Target: ${maxArticles} articles max`);
 
-// STEP 1: Authenticate and get session
-console.log('\n🔐 Step 1: Authenticating...');
-
-const loginResult = await Actor.call('pocesar/login-session', {
-    username,
-    password,
-    website: [{ 
-        url: 'https://bradfordtaxinstitute.com/EMS_Utilities/EMS_Login_NoSub.aspx' 
-    }],
-    sessionConfig: {
-        storageName: 'bradford-tax-sessions',
-        maxAgeSecs: 86400,
-        maxUsageCount: 100,
-        maxPoolSize: 10
-    },
-    steps: [{
-        username: {
-            selector: '#ContentPlaceHolder1_txtUserName',
-            timeoutMillis: 10000
-        },
-        password: {
-            selector: '#ContentPlaceHolder1_txtUserPass',
-            timeoutMillis: 10000
-        },
-        submit: {
-            selector: '#ContentPlaceHolder1_cmdLogin'
-        },
-        success: {
-            selector: 'body:not(:has(#ContentPlaceHolder1_txtUserName))',
-            timeoutMillis: 15000
-        },
-        failed: {
-            selector: '.error, .alert, div[id*="error" i], span[id*="error" i]',
-            timeoutMillis: 5000
-        },
-        waitForMillis: 5000
-    }],
-    cookieDomains: [
-        'https://bradfordtaxinstitute.com',
-        'https://tsc.bradfordtaxinstitute.com'
-    ],
-    proxyConfiguration: { 
-        useApifyProxy: true 
-    }
-});
-
-// Check login success
-if (loginResult.output.error) {
-    throw new Error(`❌ Login failed: ${loginResult.output.error}`);
-}
-
-const { session } = loginResult.output;
-console.log('✅ Authentication successful! Session ID:', session.id);
-
-// STEP 2: Load the session pool
-console.log('\n📦 Step 2: Loading session pool...');
-const sessionPool = await Actor.openSessionPool({
-    persistStateKeyValueStoreId: 'bradford-tax-sessions'
-});
-
-const authenticatedSession = sessionPool.sessions.find(s => s.id === session.id);
-console.log('✅ Session loaded');
-
-// STEP 3: Scrape articles
-console.log('\n🕷️  Step 3: Starting article scraping...');
-
 let articlesFound = 0;
 let articlesScraped = 0;
+let isAuthenticated = false;
 
 const crawler = new PuppeteerCrawler({
-    sessionPool,
+    // Use session pool for cookie management
+    useSessionPool: true,
+    sessionPoolOptions: {
+        maxPoolSize: 1,
+        sessionOptions: {
+            maxUsageCount: 100,
+            maxAgeSecs: 86400, // 24 hours
+        }
+    },
     
-    async requestHandler({ request, page }) {
+    async requestHandler({ request, page, session }) {
         const url = request.url;
+        
+        // Handle login if not authenticated
+        if (!isAuthenticated) {
+            console.log('\n🔐 Logging in to Bradford Tax Institute...');
+            
+            try {
+                // Navigate to login page
+                await page.goto('https://bradfordtaxinstitute.com/EMS_Utilities/EMS_Login_NoSub.aspx', {
+                    waitUntil: 'networkidle2',
+                    timeout: 30000
+                });
+                
+                console.log('   Filling in credentials...');
+                
+                // Fill in username
+                await page.waitForSelector('#ContentPlaceHolder1_txtUserName', { timeout: 10000 });
+                await page.type('#ContentPlaceHolder1_txtUserName', username);
+                
+                // Fill in password
+                await page.waitForSelector('#ContentPlaceHolder1_txtUserPass', { timeout: 10000 });
+                await page.type('#ContentPlaceHolder1_txtUserPass', password);
+                
+                console.log('   Submitting login form...');
+                
+                // Click login button
+                await page.click('#ContentPlaceHolder1_cmdLogin');
+                
+                // Wait for navigation after login
+                await page.waitForNavigation({ 
+                    waitUntil: 'networkidle2',
+                    timeout: 15000 
+                }).catch(() => {
+                    console.log('   Navigation timeout (may be normal)');
+                });
+                
+                // Wait a bit for any redirects
+                await page.waitForTimeout(3000);
+                
+                // Check if login was successful
+                const loginFormStillVisible = await page.$('#ContentPlaceHolder1_txtUserName');
+                
+                if (loginFormStillVisible) {
+                    // Check for error messages
+                    const errorMsg = await page.evaluate(() => {
+                        const errorElements = document.querySelectorAll('.error, .alert, [class*="error"]');
+                        return errorElements.length > 0 ? errorElements[0].textContent : 'Unknown error';
+                    });
+                    throw new Error(`Login failed: ${errorMsg}`);
+                }
+                
+                console.log('✅ Login successful!');
+                isAuthenticated = true;
+                
+                // Save cookies to session
+                const cookies = await page.cookies();
+                session.setCookies(cookies, 'https://bradfordtaxinstitute.com');
+                
+                // Navigate to start URL
+                console.log(`\n📋 Navigating to article list: ${startUrl}`);
+                await page.goto(startUrl, {
+                    waitUntil: 'networkidle2',
+                    timeout: 30000
+                });
+                
+            } catch (error) {
+                console.error('❌ Login error:', error.message);
+                throw error;
+            }
+        }
         
         // Handle article list page
         if (url.includes('tr_MonthList') || url.includes('Issue-')) {
-            console.log(`📋 Processing list page: ${url}`);
+            console.log(`\n📋 Processing list page: ${url}`);
             
             // Wait for content to load
             await page.waitForTimeout(2000);
@@ -149,7 +161,7 @@ const crawler = new PuppeteerCrawler({
         
         // Handle individual article page
         if (request.userData.isArticle) {
-            console.log(`📄 Scraping article ${articlesScraped + 1}/${maxArticles}: ${url}`);
+            console.log(`\n📄 Scraping article ${articlesScraped + 1}/${maxArticles}: ${url}`);
             
             // Wait for content
             await page.waitForTimeout(1500);
@@ -212,14 +224,14 @@ const crawler = new PuppeteerCrawler({
     
     maxRequestsPerCrawl: maxArticles + 50,
     maxConcurrency: 3,
-    requestHandlerTimeoutSecs: 120,
+    requestHandlerTimeoutSecs: 180,
     
     failedRequestHandler: async ({ request }) => {
         console.error(`❌ Request failed: ${request.url}`);
     }
 });
 
-// Start crawling from the article list page
+// Start crawling - will login first, then scrape
 await crawler.run([startUrl]);
 
 // Final stats

@@ -1,6 +1,43 @@
 # 🔧 CHANGELOG - Updates
 
-## Version 1.0.2 - File Structure Fix (Current)
+## Version 1.1.0 - Integrated Login (Current) ✅
+
+### 🎯 Major Change - No More External Actor Calls
+
+**Problem Solved:**
+- ❌ Permission error when calling `pocesar/login-session` actor
+- ❌ `ApifyApiError: Insufficient permissions for the Actor`
+- ❌ Required special API permissions
+
+**Solution:**
+- ✅ Login logic integrated directly into main actor
+- ✅ No external actor calls needed
+- ✅ No permission requirements
+- ✅ Faster and more reliable
+
+**Technical Changes:**
+1. Removed `Actor.call('pocesar/login-session')`
+2. Added direct login handling in `requestHandler`
+3. Integrated Puppeteer authentication
+4. Built-in session/cookie management
+5. Login happens on first request automatically
+
+**Benefits:**
+- ⚡ Faster (no actor-to-actor overhead)
+- 🔒 More secure (credentials stay in your actor)
+- 💪 More reliable (no external dependencies)
+- 🎯 Simpler deployment
+
+### 🔄 Migration from v1.0.x
+
+**No changes needed!**
+- Same input parameters
+- Same output format
+- Just replace main.js and rebuild
+
+---
+
+## Version 1.0.2 - File Structure Fix
 
 ### 🐛 Bug Fix - Correct File Structure for Apify
 
