@@ -1,0 +1,21 @@
+{
+  "name": "bradford-tax-institute-scraper",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Scrapes articles from Bradford Tax Institute with authentication",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "node src/main.js",
+    "test": "echo \"No tests specified\""
+  },
+  "author": "Bernard",
+  "license": "ISC",
+  "dependencies": {
+    "apify": "^3.1.0",
+    "crawlee": "^3.5.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/bradford-tax-scraper"
+  }
+}

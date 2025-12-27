@@ -1,0 +1,50 @@
+{
+  "actorSpecification": 1,
+  "name": "bradford-tax-institute-scraper",
+  "title": "Bradford Tax Institute Article Scraper",
+  "description": "Scrapes tax articles from Bradford Tax Institute with automatic login and session management",
+  "version": "1.0.0",
+  "storages": {
+    "dataset": {
+      "actorSpecification": 1,
+      "title": "Bradford Tax Articles",
+      "views": {
+        "overview": {
+          "title": "Overview",
+          "transformation": {
+            "fields": [
+              "title",
+              "date",
+              "author",
+              "category",
+              "url",
+              "scrapedAt"
+            ]
+          },
+          "display": {
+            "component": "table",
+            "properties": {
+              "title": {
+                "label": "Article Title",
+                "format": "text"
+              },
+              "date": {
+                "label": "Date",
+                "format": "text"
+              },
+              "author": {
+                "label": "Author",
+                "format": "text"
+              },
+              "url": {
+                "label": "URL",
+                "format": "link"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "input": "./INPUT_SCHEMA.json"
+}

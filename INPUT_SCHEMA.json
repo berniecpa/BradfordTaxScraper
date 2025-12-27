@@ -1,0 +1,37 @@
+{
+  "title": "Bradford Tax Institute Article Scraper",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "username": {
+      "title": "Email Address",
+      "type": "string",
+      "description": "Your Bradford Tax Institute email/username",
+      "editor": "textfield",
+      "example": "your.email@example.com"
+    },
+    "password": {
+      "title": "Password",
+      "type": "string",
+      "description": "Your Bradford Tax Institute password",
+      "editor": "textfield",
+      "isSecret": true
+    },
+    "maxArticles": {
+      "title": "Maximum Articles",
+      "type": "integer",
+      "description": "Maximum number of articles to scrape",
+      "default": 50,
+      "minimum": 1,
+      "maximum": 500
+    },
+    "startUrl": {
+      "title": "Start URL",
+      "type": "string",
+      "description": "The URL to start scraping from (article list page)",
+      "default": "https://bradfordtaxinstitute.com/Readers/tr_MonthList.aspx",
+      "editor": "textfield"
+    }
+  },
+  "required": ["username", "password"]
+}
