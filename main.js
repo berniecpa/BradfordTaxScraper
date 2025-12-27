@@ -4,7 +4,7 @@ import puppeteer from 'puppeteer';
 await Actor.init();
 
 const input = await Actor.getInput();
-const { username, password, maxArticles = 10 } = input;
+const { username, password, maxArticles = 3 } = input;
 
 const browser = await puppeteer.launch({
     headless: true,
@@ -20,9 +20,7 @@ const delay = ms => new Promise(r => setTimeout(r, ms));
 async function debug(name) {
     const screenshot = await page.screenshot({ fullPage: true });
     await Actor.setValue(`${name}.png`, screenshot, { contentType: 'image/png' });
-    const html = await page.content();
-    await Actor.setValue(`${name}.html`, html, { contentType: 'text/html' });
-    console.log(`📸 Saved: ${name}`);
+    console.log(`📸 Saved: ${name}.png`);
 }
 
 try {
@@ -38,23 +36,14 @@ try {
         page.click('#ContentPlaceHolder1_cmdLogin')
     ]);
     await delay(2000);
-    
-    console.log('URL after login:', page.url());
-    await debug('01-after-login');
-    
-    // Check cookies
-    const cookies = await page.cookies();
-    console.log('Cookies:', cookies.map(c => `${c.name}=${c.value.slice(0,15)}... [path:${c.path}]`).join('\n         '));
+    console.log('Login done, URL:', page.url());
     
     // 2. GO TO ARTICLE LIST
     console.log('\n=== STEP 2: ARTICLE LIST ===');
     await page.goto('https://bradfordtaxinstitute.com/Readers/Issue-12-01-2025.aspx', { waitUntil: 'networkidle2' });
     await delay(2000);
     
-    console.log('URL:', page.url());
-    await debug('02-article-list');
-    
-    // Get article links
+    // Get articles
     const articles = await page.evaluate(() => {
         return Array.from(document.querySelectorAll('a'))
             .filter(a => a.href.includes('/Content/') && a.href.endsWith('.aspx'))
@@ -63,102 +52,80 @@ try {
             .slice(0, 10);
     });
     
-    console.log(`Found ${articles.length} articles:`);
-    articles.forEach((a, i) => console.log(`  ${i+1}. ${a.title.slice(0,50)}`));
+    console.log(`Found ${articles.length} articles`);
     
-    if (articles.length === 0) {
-        throw new Error('No articles found');
-    }
-    
-    // 3. SCRAPE ARTICLES
-    console.log('\n=== STEP 3: SCRAPING ARTICLES ===');
+    // 3. SCRAPE ARTICLES - DEBUG EACH ONE
+    console.log('\n=== STEP 3: SCRAPING ===');
     
     const toScrape = articles.slice(0, maxArticles);
-    let articlesScraped = 0;
     
     for (let i = 0; i < toScrape.length; i++) {
         const article = toScrape[i];
-        console.log(`\n📄 [${i + 1}/${toScrape.length}] ${article.title.slice(0, 50)}...`);
-        console.log('Target:', article.url);
+        console.log(`\n--- Article ${i + 1}: ${article.title.slice(0, 40)}... ---`);
+        console.log('URL:', article.url);
         
-        // Go back to article list first
-        await page.goto('https://bradfordtaxinstitute.com/Readers/Issue-12-01-2025.aspx', { waitUntil: 'networkidle2' });
-        await delay(1000);
-        
-        // Try clicking the link instead of navigating
-        const clicked = await page.evaluate((url) => {
-            const link = document.querySelector(`a[href="${url.replace('https://bradfordtaxinstitute.com', '')}"]`) ||
-                         document.querySelector(`a[href="${url}"]`);
-            if (link) {
-                link.click();
-                return true;
-            }
-            return false;
-        }, article.url);
-        
-        if (clicked) {
-            console.log('Clicked link, waiting for navigation...');
-            await page.waitForNavigation({ waitUntil: 'networkidle2' }).catch(() => {});
-        } else {
-            console.log('Could not find link to click, using goto...');
-            await page.goto(article.url, { waitUntil: 'networkidle2' });
-        }
-        
+        // Navigate using goto (session works per your screenshot)
+        await page.goto(article.url, { waitUntil: 'networkidle2' });
         await delay(2000);
-        console.log('URL:', page.url());
         
-        if (i === 0) {
-            await debug('03-first-article');
+        // Screenshot EVERY article
+        await debug(`article-${i + 1}`);
+        
+        // Debug: Check what content is available in different selectors
+        const debugInfo = await page.evaluate(() => {
+            const selectors = [
+                '#ContentPlaceHolder1',
+                '#ContentPlaceHolder1_lblArticle',
+                '#ContentPlaceHolder1_pnlArticle',
+                'article',
+                '.article-content',
+                'main',
+                'body'
+            ];
+            
+            const results = {};
+            for (const sel of selectors) {
+                const el = document.querySelector(sel);
+                if (el) {
+                    results[sel] = {
+                        exists: true,
+                        textLength: el.innerText.trim().length,
+                        preview: el.innerText.trim().slice(0, 100)
+                    };
+                } else {
+                    results[sel] = { exists: false };
+                }
+            }
+            
+            // Also get all element IDs on the page
+            const allIds = Array.from(document.querySelectorAll('[id]'))
+                .map(el => el.id)
+                .filter(id => id.toLowerCase().includes('content') || id.toLowerCase().includes('article'))
+                .slice(0, 20);
+            
+            return { selectors: results, relevantIds: allIds };
+        });
+        
+        console.log('\nSelector debug:');
+        for (const [sel, info] of Object.entries(debugInfo.selectors)) {
+            if (info.exists) {
+                console.log(`  ${sel}: ${info.textLength} chars - "${info.preview.slice(0, 50)}..."`);
+            } else {
+                console.log(`  ${sel}: NOT FOUND`);
+            }
         }
+        
+        console.log('\nRelevant IDs on page:', debugInfo.relevantIds.join(', '));
         
         // Check if blocked
-        const pageText = await page.evaluate(() => document.body.innerText);
-        const isBlocked = pageText.includes('Log in to view full article');
+        const isBlocked = await page.evaluate(() => 
+            document.body.innerText.includes('Log in to view full article')
+        );
         console.log('Blocked:', isBlocked);
-        
-        if (isBlocked) {
-            console.log('❌ SESSION NOT PERSISTING TO ARTICLE PAGE');
-            if (i === 0) {
-                const articleCookies = await page.cookies();
-                console.log('Cookies on article page:');
-                console.log(articleCookies.map(c => `${c.name}=${c.value.slice(0,15)}... [path:${c.path}]`).join('\n'));
-            }
-            continue;
-        }
-        
-        // Extract content
-        const data = await page.evaluate(() => {
-            const h1 = document.querySelector('h1');
-            const title = h1 ? h1.innerText.trim() : document.title;
-            
-            const el = document.querySelector('#ContentPlaceHolder1') || document.body;
-            const content = el.innerText.trim();
-            
-            const wordMatch = document.body.innerText.match(/Word Count:\s*(\d+)/);
-            const dateMatch = document.body.innerText.match(/Article Date:\s*([A-Za-z]+\s+\d{4})/);
-            
-            return {
-                title,
-                content,
-                contentLength: content.length,
-                wordCount: wordMatch ? parseInt(wordMatch[1]) : null,
-                articleDate: dateMatch ? dateMatch[1] : null,
-                url: window.location.href
-            };
-        });
-        
-        console.log(`✅ ${data.contentLength} chars`);
-        
-        await Actor.pushData({
-            ...data,
-            scrapedAt: new Date().toISOString(),
-            articleNumber: i + 1
-        });
-        
-        articlesScraped++;
     }
     
-    console.log(`\n✅ Done! Scraped ${articlesScraped} articles`);
+    console.log('\n=== DONE ===');
+    console.log('Check the screenshots in Key-Value Store to see what content is available');
     
 } catch (err) {
     console.error('Error:', err.message);
