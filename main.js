@@ -58,7 +58,7 @@ try {
         await page.goto(article.url, { waitUntil: 'networkidle2' });
         await delay(2000);
         
-        // Content is in Frame 1 (the iframe with ?_p=1&EncMethod=NONE&Agent=EMS_Viewer)
+        // Content is in Frame 1 (the iframe with EMS_Viewer)
         const frames = page.frames();
         const contentFrame = frames.find(f => f.url().includes('EMS_Viewer'));
         
@@ -67,7 +67,7 @@ try {
             continue;
         }
         
-        // Extract content from the iframe
+        // Extract and format content from the iframe
         const data = await contentFrame.evaluate(() => {
             const bodyText = document.body.innerText;
             
@@ -76,21 +76,144 @@ try {
                 return { blocked: true };
             }
             
+            // Get title
             const h1 = document.querySelector('h1');
-            const title = h1 ? h1.innerText.trim() : document.title;
-            
-            // Get main content
-            const content = document.body.innerText.trim();
+            const title = h1 ? h1.innerText.trim() : '';
             
             // Get metadata
             const wordMatch = bodyText.match(/Word Count:\s*(\d+)/);
             const dateMatch = bodyText.match(/Article Date:\s*([A-Za-z]+\s+\d{4})/);
             
+            // --- EXTRACT ARTICLE CONTENT AS MARKDOWN ---
+            
+            // Find the main content container (try various selectors)
+            const contentContainer = document.querySelector('#ContentPlaceHolder1') ||
+                                    document.querySelector('.article-content') ||
+                                    document.querySelector('article') ||
+                                    document.body;
+            
+            // Clone to avoid modifying the page
+            const clone = contentContainer.cloneNode(true);
+            
+            // Remove navigation and unwanted elements
+            const removeSelectors = [
+                'nav', 'header', 'footer', 'aside',
+                '.menu', '.nav', '.sidebar', '.search',
+                '[class*="menu"]', '[class*="nav"]',
+                'script', 'style', 'noscript',
+                'form', 'input', 'button',
+                '[id*="Search"]', '[class*="Search"]'
+            ];
+            removeSelectors.forEach(sel => {
+                clone.querySelectorAll(sel).forEach(el => el.remove());
+            });
+            
+            // Convert HTML to Markdown
+            function htmlToMarkdown(element) {
+                let markdown = '';
+                
+                function processNode(node) {
+                    if (node.nodeType === Node.TEXT_NODE) {
+                        return node.textContent;
+                    }
+                    
+                    if (node.nodeType !== Node.ELEMENT_NODE) {
+                        return '';
+                    }
+                    
+                    const tag = node.tagName.toLowerCase();
+                    let content = '';
+                    
+                    // Process children first
+                    for (const child of node.childNodes) {
+                        content += processNode(child);
+                    }
+                    
+                    // Apply formatting based on tag
+                    switch (tag) {
+                        case 'h1':
+                            return `\n# ${content.trim()}\n\n`;
+                        case 'h2':
+                            return `\n## ${content.trim()}\n\n`;
+                        case 'h3':
+                            return `\n### ${content.trim()}\n\n`;
+                        case 'h4':
+                            return `\n#### ${content.trim()}\n\n`;
+                        case 'p':
+                            return `${content.trim()}\n\n`;
+                        case 'br':
+                            return '\n';
+                        case 'strong':
+                        case 'b':
+                            return `**${content.trim()}**`;
+                        case 'em':
+                        case 'i':
+                            return `*${content.trim()}*`;
+                        case 'ul':
+                            return `\n${content}\n`;
+                        case 'ol':
+                            return `\n${content}\n`;
+                        case 'li':
+                            return `- ${content.trim()}\n`;
+                        case 'a':
+                            const href = node.getAttribute('href');
+                            if (href && !href.startsWith('#') && !href.startsWith('javascript:')) {
+                                return `[${content.trim()}](${href})`;
+                            }
+                            return content;
+                        case 'blockquote':
+                            return `\n> ${content.trim().replace(/\n/g, '\n> ')}\n\n`;
+                        case 'code':
+                            return `\`${content}\``;
+                        case 'pre':
+                            return `\n\`\`\`\n${content.trim()}\n\`\`\`\n\n`;
+                        case 'table':
+                            return `\n${content}\n`;
+                        case 'tr':
+                            return `|${content}\n`;
+                        case 'td':
+                        case 'th':
+                            return ` ${content.trim()} |`;
+                        case 'div':
+                        case 'span':
+                        case 'section':
+                            return content;
+                        default:
+                            return content;
+                    }
+                }
+                
+                markdown = processNode(element);
+                
+                // Clean up the markdown
+                markdown = markdown
+                    // Remove navigation items
+                    .replace(/^(Home|Logout|Welcome.*|Subscriber.*|Contact|SEARCH|Help|RESOURCES|Articles|Business Owner.*|Tax Professional.*|Tax Planning.*|Tax Saver.*|Helpful IRS.*)\n/gm, '')
+                    // Remove metadata lines at start
+                    .replace(/^Article Date:.*\n/gm, '')
+                    .replace(/^Word Count:.*\n/gm, '')
+                    // Remove share buttons text
+                    .replace(/Share\s*(Facebook|Twitter|LinkedIn|Email)?\s*/g, '')
+                    .replace(/\[ CLICK HERE TO PRINT \]/g, '')
+                    // Clean multiple newlines
+                    .replace(/\n{3,}/g, '\n\n')
+                    // Clean multiple spaces
+                    .replace(/[ \t]+/g, ' ')
+                    // Trim lines
+                    .split('\n').map(line => line.trim()).join('\n')
+                    // Final trim
+                    .trim();
+                
+                return markdown;
+            }
+            
+            const markdownContent = htmlToMarkdown(clone);
+            
             return {
                 blocked: false,
                 title,
-                content,
-                contentLength: content.length,
+                content: markdownContent,
+                contentLength: markdownContent.length,
                 wordCount: wordMatch ? parseInt(wordMatch[1]) : null,
                 articleDate: dateMatch ? dateMatch[1] : null,
                 url: window.location.href
