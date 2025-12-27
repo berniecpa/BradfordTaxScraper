@@ -1,6 +1,46 @@
 # 🔧 CHANGELOG - Updates
 
-## Version 1.1.0 - Integrated Login (Current) ✅
+## Version 1.1.1 - Docker/Puppeteer Fix (Current) ✅
+
+### 🐳 Critical Fix - Added Puppeteer Docker Support
+
+**Problem:**
+- ❌ `Error: Cannot find module 'puppeteer'`
+- ❌ Default Docker image doesn't include Chrome/Puppeteer
+- ❌ Actor couldn't run browser automation
+
+**Solution:**
+- ✅ Added `Dockerfile` with Puppeteer-enabled image
+- ✅ Added `puppeteer` to package.json dependencies
+- ✅ Added `.dockerignore` for build optimization
+- ✅ Updated `.actor/actor.json` to use Dockerfile
+
+**New Files:**
+1. `Dockerfile` - Specifies `apify/actor-node-puppeteer-chrome:20` image
+2. `.dockerignore` - Excludes docs from Docker build
+
+**Updated Files:**
+1. `package.json` - Added puppeteer@^21.0.0
+2. `.actor/actor.json` - Points to Dockerfile, version bumped to 1.1.0
+
+**Impact:**
+- ✅ Puppeteer now available
+- ✅ Chrome browser included
+- ✅ Actor builds and runs successfully
+- ⏱️ First build takes ~60-90 seconds (downloads Chrome)
+
+**Deployment:**
+Upload all 6 files to Apify:
+- main.js
+- package.json (updated)
+- INPUT_SCHEMA.json
+- Dockerfile (new)
+- .dockerignore (new)
+- .actor/actor.json (updated)
+
+---
+
+## Version 1.1.0 - Integrated Login
 
 ### 🎯 Major Change - No More External Actor Calls
 

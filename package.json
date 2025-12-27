@@ -12,7 +12,8 @@
   "license": "ISC",
   "dependencies": {
     "apify": "^3.1.0",
-    "crawlee": "^3.5.0"
+    "crawlee": "^3.5.0",
+    "puppeteer": "^21.0.0"
   },
   "repository": {
     "type": "git",
