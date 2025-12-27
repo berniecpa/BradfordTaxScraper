@@ -1,6 +1,40 @@
-# 🔧 CHANGELOG - Selector Fix
+# 🔧 CHANGELOG - Updates
 
-## Version 1.0.1 - FINAL (Current)
+## Version 1.0.2 - File Structure Fix (Current)
+
+### 🐛 Bug Fix - Correct File Structure for Apify
+
+**Issue:**
+- Apify couldn't find main.js
+- Error: `Cannot find module '/usr/src/app/src/main.js'`
+
+**Root Cause:**
+- main.js was in `src/` folder
+- Apify expects it at root level
+
+**Fix Applied:**
+1. Moved `main.js` to root level
+2. Updated `package.json` to point to `main.js` (not `src/main.js`)
+3. Created **FILE_STRUCTURE_FIX.md** with upload instructions
+
+**Correct Structure:**
+```
+bradford-tax-scraper/
+├── main.js           ← ROOT LEVEL (was in src/)
+├── package.json      ← ROOT LEVEL
+├── INPUT_SCHEMA.json ← ROOT LEVEL
+└── .actor/
+    └── actor.json
+```
+
+### 🎯 Impact
+- ✅ Apify will now find main.js correctly
+- ✅ Build will succeed
+- ✅ Actor will run
+
+---
+
+## Version 1.0.1 - Selector Fix
 
 ### 🐛 Bug Fix - Correct Password Selector
 
