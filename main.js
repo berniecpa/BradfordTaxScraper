@@ -18,6 +18,7 @@ console.log('🚀 Starting Bradford Tax Institute Scraper');
 console.log(`📊 Target: ${maxArticles} articles max`);
 
 let articlesScraped = 0;
+let savedCookies = []; // Store cookies globally
 
 const browser = await puppeteer.launch({
     headless: true,
@@ -34,6 +35,18 @@ const page = await browser.newPage();
 await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
 await page.setViewport({ width: 1920, height: 1080 });
 
+// Intercept requests to ensure cookies are sent
+await page.setRequestInterception(true);
+page.on('request', request => {
+    const headers = request.headers();
+    // Ensure cookies are included
+    if (savedCookies.length > 0) {
+        const cookieString = savedCookies.map(c => `${c.name}=${c.value}`).join('; ');
+        headers['Cookie'] = cookieString;
+    }
+    request.continue({ headers });
+});
+
 async function saveDebug(name) {
     if (!debug) return;
     try {
@@ -47,9 +60,138 @@ async function saveDebug(name) {
     }
 }
 
+// Function to check if we're logged in on current page
+async function checkLoginStatus() {
+    return await page.evaluate(() => {
+        const bodyText = document.body.innerText;
+        const hasLogout = bodyText.includes('Logout') || bodyText.includes('Log Out');
+        const hasLoginForm = !!document.querySelector('#ContentPlaceHolder1_txtUserName') ||
+                            !!document.querySelector('input[id*="txtUserName"]');
+        const hasLoginPrompt = bodyText.includes('Log in to view full article') ||
+                              bodyText.includes('Already a subscriber?');
+        return {
+            isLoggedIn: hasLogout && !hasLoginForm,
+            hasLoginForm,
+            hasLoginPrompt,
+            hasLogout
+        };
+    });
+}
+
+// Function to perform login (can be called on any page with login form)
+async function performLogin() {
+    console.log('   🔐 Performing login...');
+    
+    // Find the username field (might have different IDs on different pages)
+    const usernameSelectors = [
+        '#ContentPlaceHolder1_txtUserName',
+        'input[id*="txtUserName"]',
+        'input[name*="UserName"]',
+        'input[type="text"][id*="Email"]'
+    ];
+    
+    const passwordSelectors = [
+        '#ContentPlaceHolder1_txtUserPass',
+        'input[id*="txtUserPass"]',
+        'input[id*="txtPassword"]',
+        'input[type="password"]'
+    ];
+    
+    const loginButtonSelectors = [
+        '#ContentPlaceHolder1_cmdLogin',
+        'input[id*="cmdLogin"]',
+        'a[id*="cmdLogin"]',
+        'button[type="submit"]'
+    ];
+    
+    let usernameField = null;
+    let passwordField = null;
+    let loginButton = null;
+    
+    for (const sel of usernameSelectors) {
+        usernameField = await page.$(sel);
+        if (usernameField) {
+            console.log(`   Found username field: ${sel}`);
+            break;
+        }
+    }
+    
+    for (const sel of passwordSelectors) {
+        passwordField = await page.$(sel);
+        if (passwordField) {
+            console.log(`   Found password field: ${sel}`);
+            break;
+        }
+    }
+    
+    for (const sel of loginButtonSelectors) {
+        loginButton = await page.$(sel);
+        if (loginButton) {
+            console.log(`   Found login button: ${sel}`);
+            break;
+        }
+    }
+    
+    if (!usernameField || !passwordField) {
+        console.log('   ❌ Could not find login form fields');
+        return false;
+    }
+    
+    // Clear and fill credentials
+    await usernameField.click({ clickCount: 3 });
+    await usernameField.type(username, { delay: 30 });
+    
+    await passwordField.click({ clickCount: 3 });
+    await passwordField.type(password, { delay: 30 });
+    
+    // Click login
+    if (loginButton) {
+        await Promise.all([
+            page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => null),
+            loginButton.click()
+        ]);
+    } else {
+        // Try pressing Enter
+        await passwordField.press('Enter');
+        await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => null);
+    }
+    
+    await delay(3000);
+    
+    // Save cookies after login
+    savedCookies = await page.cookies();
+    console.log(`   📦 Saved ${savedCookies.length} cookies after login`);
+    
+    // Log the important auth cookies
+    const authCookies = savedCookies.filter(c => 
+        c.name.includes('EMS_') || 
+        c.name.includes('Auth') || 
+        c.name.includes('Session')
+    );
+    authCookies.forEach(c => {
+        console.log(`      ${c.name}: ${c.value.substring(0, 20)}... (domain: ${c.domain}, path: ${c.path})`);
+    });
+    
+    return true;
+}
+
+// Function to ensure cookies are set for the domain
+async function ensureCookiesSet() {
+    if (savedCookies.length === 0) return;
+    
+    // Set cookies with broader scope
+    const broadCookies = savedCookies.map(cookie => ({
+        ...cookie,
+        domain: '.bradfordtaxinstitute.com', // Ensure domain-wide
+        path: '/' // Ensure site-wide
+    }));
+    
+    await page.setCookie(...broadCookies);
+}
+
 try {
     // ========================================
-    // STEP 1: LOGIN
+    // STEP 1: INITIAL LOGIN
     // ========================================
     console.log('\n🔐 Step 1: Logging in...');
     
@@ -60,23 +202,13 @@ try {
     
     await page.waitForSelector('#ContentPlaceHolder1_txtUserName', { timeout: 10000 });
     
-    const usernameField = await page.$('#ContentPlaceHolder1_txtUserName');
-    const passwordField = await page.$('#ContentPlaceHolder1_txtUserPass');
+    await performLogin();
     
-    await usernameField.click({ clickCount: 3 });
-    await usernameField.type(username, { delay: 50 });
-    await passwordField.click({ clickCount: 3 });
-    await passwordField.type(password, { delay: 50 });
+    // Verify login worked
+    const loginStatus = await checkLoginStatus();
+    console.log(`   Login status:`, loginStatus);
     
-    await Promise.all([
-        page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => null),
-        page.click('#ContentPlaceHolder1_cmdLogin')
-    ]);
-    
-    await delay(3000);
-    
-    const stillOnLogin = await page.$('#ContentPlaceHolder1_txtUserName');
-    if (stillOnLogin) {
+    if (!loginStatus.isLoggedIn && !loginStatus.hasLogout) {
         await saveDebug('login-failed');
         throw new Error('Login failed - check credentials');
     }
@@ -89,6 +221,9 @@ try {
     console.log(`📋 Step 2: Navigating to article list...`);
     console.log(`   URL: ${startUrl}`);
     
+    // Ensure cookies before navigation
+    await ensureCookiesSet();
+    
     await page.goto(startUrl, {
         waitUntil: 'networkidle2',
         timeout: 30000
@@ -99,7 +234,6 @@ try {
     
     // ========================================
     // STEP 3: EXTRACT ARTICLE LINKS
-    // The key pattern is: /Content/*.aspx
     // ========================================
     console.log(`\n🔍 Step 3: Finding article links...`);
     
@@ -111,12 +245,7 @@ try {
             const href = link.href;
             const text = link.textContent.trim();
             
-            // THE KEY FIX: Only match /Content/ URLs (actual articles)
-            // Pattern: https://bradfordtaxinstitute.com/Content/Article-Name.aspx
-            if (href && href.includes('/Content/') && href.endsWith('.aspx')) {
-                // Skip if it's not an actual article (very short title)
-                if (text.length < 15) continue;
-                
+            if (href && href.includes('/Content/') && href.endsWith('.aspx') && text.length >= 15) {
                 links.push({
                     url: href,
                     title: text.replace(/\s+/g, ' ').trim()
@@ -124,95 +253,21 @@ try {
             }
         }
         
-        // Remove duplicates
-        const unique = [];
-        const seen = new Set();
-        for (const link of links) {
-            if (!seen.has(link.url)) {
-                seen.add(link.url);
-                unique.push(link);
-            }
-        }
-        
-        return unique;
+        return links.filter((item, index, self) => 
+            index === self.findIndex(t => t.url === item.url)
+        );
     });
     
-    console.log(`   Found ${articleLinks.length} articles in /Content/`);
-    
-    if (articleLinks.length === 0) {
-        console.log('\n   ⚠️ No /Content/ articles found on this page.');
-        console.log('   This might be a list page. Looking for issue links...\n');
-        
-        // Maybe we're on a month list page - find issue links
-        const issueLinks = await page.evaluate(() => {
-            const links = [];
-            const allLinks = document.querySelectorAll('a');
-            
-            for (const link of allLinks) {
-                const href = link.href;
-                const text = link.textContent.trim();
-                
-                // Issue pages are like: /Readers/Issue-MM-DD-YYYY.aspx
-                if (href && href.includes('/Readers/Issue-') && href.endsWith('.aspx')) {
-                    links.push({
-                        url: href,
-                        title: text.replace(/\s+/g, ' ').trim()
-                    });
-                }
-            }
-            
-            return links.filter((item, index, self) => 
-                index === self.findIndex(t => t.url === item.url)
-            );
-        });
-        
-        if (issueLinks.length > 0) {
-            console.log(`   Found ${issueLinks.length} issue pages. Navigating to first issue...`);
-            const firstIssue = issueLinks[0];
-            console.log(`   Issue: ${firstIssue.url}`);
-            
-            await page.goto(firstIssue.url, { waitUntil: 'networkidle2', timeout: 30000 });
-            await delay(2000);
-            
-            // Re-extract article links from the issue page
-            const issueArticles = await page.evaluate(() => {
-                const links = [];
-                const allLinks = document.querySelectorAll('a');
-                
-                for (const link of allLinks) {
-                    const href = link.href;
-                    const text = link.textContent.trim();
-                    
-                    if (href && href.includes('/Content/') && href.endsWith('.aspx') && text.length >= 15) {
-                        links.push({
-                            url: href,
-                            title: text.replace(/\s+/g, ' ').trim()
-                        });
-                    }
-                }
-                
-                return links.filter((item, index, self) => 
-                    index === self.findIndex(t => t.url === item.url)
-                );
-            });
-            
-            articleLinks.push(...issueArticles);
-            console.log(`   Found ${issueArticles.length} articles in this issue`);
-        }
-    }
+    console.log(`   Found ${articleLinks.length} articles`);
     
     if (articleLinks.length === 0) {
         await saveDebug('no-articles');
-        throw new Error('No articles found - check debug files');
+        throw new Error('No articles found');
     }
     
-    console.log(`\n   📰 Articles to scrape:`);
-    articleLinks.slice(0, 10).forEach((link, i) => {
-        console.log(`      ${i + 1}. ${link.title.substring(0, 60)}`);
+    articleLinks.slice(0, 5).forEach((link, i) => {
+        console.log(`      ${i + 1}. ${link.title.substring(0, 55)}`);
     });
-    if (articleLinks.length > 10) {
-        console.log(`      ... and ${articleLinks.length - 10} more`);
-    }
     
     // ========================================
     // STEP 4: SCRAPE EACH ARTICLE
@@ -223,9 +278,12 @@ try {
     
     for (let i = 0; i < articlesToScrape.length; i++) {
         const article = articlesToScrape[i];
-        console.log(`📄 [${i + 1}/${articlesToScrape.length}] ${article.title.substring(0, 55)}...`);
+        console.log(`📄 [${i + 1}/${articlesToScrape.length}] ${article.title.substring(0, 50)}...`);
         
         try {
+            // CRITICAL: Ensure cookies are set before each navigation
+            await ensureCookiesSet();
+            
             await page.goto(article.url, {
                 waitUntil: 'networkidle2',
                 timeout: 30000
@@ -233,43 +291,61 @@ try {
             
             await delay(2000);
             
+            // Check if we need to re-login on this page
+            const pageStatus = await checkLoginStatus();
+            console.log(`   Page status: loggedIn=${pageStatus.isLoggedIn}, hasLoginPrompt=${pageStatus.hasLoginPrompt}`);
+            
+            if (pageStatus.hasLoginPrompt || pageStatus.hasLoginForm) {
+                console.log('   ⚠️ Session lost - re-authenticating on article page...');
+                
+                if (i === 0) {
+                    await saveDebug('article-needs-login');
+                }
+                
+                // Try to login directly on this article page
+                const loginSuccess = await performLogin();
+                
+                if (!loginSuccess) {
+                    console.log('   ❌ Re-login failed, skipping article');
+                    continue;
+                }
+                
+                // Page should now show full content after login
+                await delay(2000);
+                
+                // Verify we now have access
+                const newStatus = await checkLoginStatus();
+                if (newStatus.hasLoginPrompt) {
+                    console.log('   ❌ Still seeing login prompt after re-auth');
+                    await saveDebug(`article-${i}-still-blocked`);
+                    continue;
+                }
+            }
+            
             // Save first article for debugging
             if (i === 0) {
-                await saveDebug('first-article');
-            }
-            
-            // Check for access issues
-            const pageState = await page.evaluate(() => {
-                const bodyText = document.body.innerText;
-                return {
-                    hasLoginForm: !!document.querySelector('input[type="password"]'),
-                    hasAccessDenied: bodyText.toLowerCase().includes('access denied') ||
-                                    bodyText.toLowerCase().includes('please log in') ||
-                                    bodyText.toLowerCase().includes('subscription required'),
-                    bodyLength: bodyText.length
-                };
-            });
-            
-            if (pageState.hasLoginForm) {
-                console.log(`   🔴 Session expired`);
-                continue;
-            }
-            
-            if (pageState.hasAccessDenied) {
-                console.log(`   🔴 Access denied`);
-                continue;
+                await saveDebug('first-article-content');
             }
             
             // Extract article content
             const articleData = await page.evaluate(() => {
-                // Bradford Tax Institute uses ContentPlaceHolder1 for main content
+                const bodyText = document.body.innerText;
+                
+                // Check if we're seeing the paywall
+                if (bodyText.includes('Log in to view full article')) {
+                    return {
+                        blocked: true,
+                        preview: bodyText.substring(0, 500)
+                    };
+                }
+                
+                // Bradford Tax Institute content selectors
                 const contentSelectors = [
                     '#ContentPlaceHolder1_lblArticle',
                     '#ContentPlaceHolder1_pnlArticle',
                     '#ContentPlaceHolder1',
                     '.article-content',
-                    'article',
-                    'main'
+                    'article'
                 ];
                 
                 let content = '';
@@ -279,7 +355,8 @@ try {
                     const el = document.querySelector(selector);
                     if (el) {
                         const text = el.innerText.trim();
-                        if (text.length > 300) {
+                        // Make sure we're getting more than just the teaser
+                        if (text.length > 500 && !text.includes('Log in to view full article')) {
                             content = text;
                             contentSource = selector;
                             break;
@@ -287,56 +364,60 @@ try {
                     }
                 }
                 
-                // Fallback: clean body
-                if (content.length < 300) {
+                // Fallback
+                if (content.length < 500) {
                     const clone = document.body.cloneNode(true);
-                    clone.querySelectorAll('nav, header, footer, script, style, aside, .sidebar, #menu, .menu').forEach(el => el.remove());
-                    content = clone.innerText.trim();
-                    contentSource = 'body-cleaned';
-                }
-                
-                // Get title from H1
-                const h1 = document.querySelector('h1');
-                const title = h1 ? h1.innerText.trim() : document.title.split(' - ')[0].trim();
-                
-                // Get date from page
-                const dateMatch = document.body.innerText.match(/(\d{1,2}[-\/]\d{1,2}[-\/]\d{2,4})/);
-                
-                // Get description (first paragraph after title)
-                const paragraphs = document.querySelectorAll('p');
-                let description = '';
-                for (const p of paragraphs) {
-                    const text = p.innerText.trim();
-                    if (text.length > 50 && text.length < 500) {
-                        description = text;
-                        break;
+                    clone.querySelectorAll('nav, header, footer, script, style, aside').forEach(el => el.remove());
+                    const cleanText = clone.innerText.trim();
+                    if (!cleanText.includes('Log in to view full article') || cleanText.length > 2000) {
+                        content = cleanText;
+                        contentSource = 'body-cleaned';
                     }
                 }
                 
+                // Get metadata
+                const h1 = document.querySelector('h1');
+                const title = h1 ? h1.innerText.trim() : document.title;
+                
+                // Word count (Bradford shows this)
+                const wordCountMatch = bodyText.match(/Word Count:\s*(\d+)/);
+                const wordCount = wordCountMatch ? parseInt(wordCountMatch[1]) : null;
+                
+                // Article date
+                const dateMatch = bodyText.match(/Article Date:\s*([A-Za-z]+\s+\d{4})/);
+                const articleDate = dateMatch ? dateMatch[1] : null;
+                
                 return {
+                    blocked: false,
                     title,
-                    description,
                     content,
                     contentSource,
                     contentLength: content.length,
-                    articleDate: dateMatch ? dateMatch[1] : null,
+                    wordCount,
+                    articleDate,
                     url: window.location.href
                 };
             });
             
-            console.log(`   ✅ ${articleData.contentLength} chars (${articleData.contentSource})`);
+            if (articleData.blocked) {
+                console.log('   🔴 BLOCKED - Still seeing paywall');
+                console.log(`   Preview: ${articleData.preview.substring(0, 100)}...`);
+                await saveDebug(`article-${i}-blocked`);
+                continue;
+            }
+            
+            console.log(`   ✅ ${articleData.contentLength} chars | ${articleData.wordCount || '?'} words`);
             
             await Actor.pushData({
                 ...articleData,
                 originalTitle: article.title,
-                status: articleData.contentLength > 300 ? 'success' : 'short',
+                status: articleData.contentLength > 500 ? 'success' : 'partial',
                 scrapedAt: new Date().toISOString(),
                 articleNumber: i + 1
             });
             
             articlesScraped++;
             
-            // Respectful delay
             await delay(1500 + Math.random() * 1000);
             
         } catch (error) {
