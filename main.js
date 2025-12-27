@@ -217,6 +217,14 @@ const crawler = new PuppeteerCrawler({
             // Wait for content
             await page.waitForTimeout(1500);
             
+            // Check if we got redirected (e.g., to login page)
+            const currentUrl = page.url();
+            if (currentUrl !== url) {
+                console.log(`   ⚠️  REDIRECT DETECTED!`);
+                console.log(`   Requested: ${url}`);
+                console.log(`   Actual: ${currentUrl}`);
+            }
+            
             // Debug: Show what's on the article page
             const pageDebug = await page.evaluate(() => {
                 return {
@@ -224,6 +232,9 @@ const crawler = new PuppeteerCrawler({
                     h1: document.querySelector('h1')?.innerText || 'No H1 found',
                     bodyLength: document.body.innerText.length,
                     bodyPreview: document.body.innerText.substring(0, 300),
+                    htmlPreview: document.body.innerHTML.substring(0, 500),
+                    hasLoginForm: !!document.querySelector('input[type="password"]'),
+                    hasSubscribeButton: !!document.querySelector('[href*="subscribe"]'),
                     mainSelectors: {
                         hasArticleContent: !!document.querySelector('.article-content'),
                         hasArticle: !!document.querySelector('article'),
@@ -235,9 +246,50 @@ const crawler = new PuppeteerCrawler({
                 };
             });
             
+            console.log(`   Current URL: ${currentUrl}`);
             console.log(`   Page title: ${pageDebug.title}`);
             console.log(`   H1: ${pageDebug.h1}`);
             console.log(`   Body text length: ${pageDebug.bodyLength} chars`);
+            
+            // Check for authentication issues
+            if (pageDebug.hasLoginForm) {
+                console.log(`   ⚠️  LOGIN FORM DETECTED - Session may have expired!`);
+            }
+            if (pageDebug.hasSubscribeButton) {
+                console.log(`   ⚠️  SUBSCRIPTION PROMPT DETECTED - May need additional access!`);
+            }
+            
+            // If page is empty, capture more info
+            if (pageDebug.bodyLength === 0) {
+                console.log(`   🔴 PAGE IS COMPLETELY EMPTY!`);
+                console.log(`   HTML preview: ${pageDebug.htmlPreview}`);
+                
+                // Take screenshot for debugging
+                const screenshot = await page.screenshot({ 
+                    encoding: 'base64',
+                    fullPage: false 
+                });
+                console.log(`   📸 Screenshot captured (base64 length: ${screenshot.length})`);
+                
+                // Save the raw HTML
+                const html = await page.content();
+                await Actor.pushData({
+                    url,
+                    type: 'DEBUG_EMPTY_PAGE',
+                    currentUrl,
+                    html: html.substring(0, 5000), // First 5000 chars
+                    hasLoginForm: pageDebug.hasLoginForm,
+                    hasSubscribeButton: pageDebug.hasSubscribeButton,
+                    scrapedAt: new Date().toISOString()
+                });
+                
+                console.log(`   💾 Saved debug info to dataset`);
+                
+                // Continue to next article
+                articlesScraped++;
+                return;
+            }
+            
             console.log(`   Body preview: ${pageDebug.bodyPreview.substring(0, 150)}...`);
             console.log(`   Selector check:`, pageDebug.mainSelectors);
             
