@@ -4,7 +4,7 @@ import puppeteer from 'puppeteer';
 await Actor.init();
 
 const input = await Actor.getInput();
-const { username, password } = input;
+const { username, password, maxArticles = 50 } = input;
 
 const browser = await puppeteer.launch({
     headless: true,
@@ -16,10 +16,11 @@ await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.
 await page.setViewport({ width: 1920, height: 1080 });
 
 const delay = ms => new Promise(r => setTimeout(r, ms));
+let articlesScraped = 0;
 
 try {
     // 1. LOGIN
-    console.log('Logging in...');
+    console.log('🔐 Logging in...');
     await page.goto('https://bradfordtaxinstitute.com/EMS_Utilities/EMS_Login_NoSub.aspx', { waitUntil: 'networkidle2' });
     
     await page.type('#ContentPlaceHolder1_txtUserName', username);
@@ -30,61 +31,89 @@ try {
         page.click('#ContentPlaceHolder1_cmdLogin')
     ]);
     await delay(2000);
-    console.log('Login done');
+    console.log('✅ Login done\n');
     
-    // 2. GO TO ONE ARTICLE
-    console.log('\nGoing to article...');
-    await page.goto('https://bradfordtaxinstitute.com/Content/Form-1099-DA-Is-Here-How-It-Will-Impact-Your-Crypto-Taxes.aspx', { waitUntil: 'networkidle2' });
-    await delay(3000);
+    // 2. GET ARTICLE LIST
+    console.log('📋 Getting article list...');
+    await page.goto('https://bradfordtaxinstitute.com/Readers/Issue-12-01-2025.aspx', { waitUntil: 'networkidle2' });
+    await delay(2000);
     
-    // Screenshot
-    const screenshot = await page.screenshot({ fullPage: true });
-    await Actor.setValue('article.png', screenshot, { contentType: 'image/png' });
-    console.log('Screenshot saved');
-    
-    // Try different ways to get content
-    console.log('\n--- Testing content extraction ---\n');
-    
-    // Method 1: page.content()
-    const html = await page.content();
-    console.log('1. page.content() length:', html.length);
-    console.log('   First 200 chars:', html.slice(0, 200));
-    
-    // Method 2: Simple evaluate
-    const bodyText = await page.evaluate(() => document.body.innerText);
-    console.log('\n2. document.body.innerText length:', bodyText ? bodyText.length : 'NULL');
-    if (bodyText) {
-        console.log('   First 200 chars:', bodyText.slice(0, 200));
-    }
-    
-    // Method 3: Check if in iframe
-    const frames = page.frames();
-    console.log('\n3. Number of frames:', frames.length);
-    for (let i = 0; i < frames.length; i++) {
-        const frame = frames[i];
-        console.log(`   Frame ${i}: ${frame.url()}`);
-        try {
-            const frameContent = await frame.evaluate(() => document.body?.innerText?.slice(0, 100));
-            console.log(`   Content: ${frameContent}`);
-        } catch (e) {
-            console.log(`   Error: ${e.message}`);
-        }
-    }
-    
-    // Method 4: $eval
-    try {
-        const bodyText2 = await page.$eval('body', el => el.innerText);
-        console.log('\n4. $eval body length:', bodyText2.length);
-        console.log('   First 200 chars:', bodyText2.slice(0, 200));
-    } catch (e) {
-        console.log('\n4. $eval error:', e.message);
-    }
-    
-    // Method 5: Get all text nodes
-    const allText = await page.evaluate(() => {
-        return document.documentElement.outerHTML.slice(0, 500);
+    const articles = await page.evaluate(() => {
+        return Array.from(document.querySelectorAll('a'))
+            .filter(a => a.href.includes('/Content/') && a.href.endsWith('.aspx'))
+            .map(a => ({ url: a.href, title: a.textContent.trim() }))
+            .filter(a => a.title.length > 20)
+            .filter((a, i, arr) => arr.findIndex(x => x.url === a.url) === i);
     });
-    console.log('\n5. documentElement HTML (first 500):', allText);
+    
+    console.log(`Found ${articles.length} articles\n`);
+    
+    // 3. SCRAPE EACH ARTICLE
+    const toScrape = articles.slice(0, maxArticles);
+    
+    for (let i = 0; i < toScrape.length; i++) {
+        const article = toScrape[i];
+        console.log(`📄 [${i + 1}/${toScrape.length}] ${article.title.slice(0, 50)}...`);
+        
+        await page.goto(article.url, { waitUntil: 'networkidle2' });
+        await delay(2000);
+        
+        // Content is in Frame 1 (the iframe with ?_p=1&EncMethod=NONE&Agent=EMS_Viewer)
+        const frames = page.frames();
+        const contentFrame = frames.find(f => f.url().includes('EMS_Viewer'));
+        
+        if (!contentFrame) {
+            console.log('   ❌ Content frame not found');
+            continue;
+        }
+        
+        // Extract content from the iframe
+        const data = await contentFrame.evaluate(() => {
+            const bodyText = document.body.innerText;
+            
+            // Check if blocked
+            if (bodyText.includes('Log in to view full article')) {
+                return { blocked: true };
+            }
+            
+            const h1 = document.querySelector('h1');
+            const title = h1 ? h1.innerText.trim() : document.title;
+            
+            // Get main content
+            const content = document.body.innerText.trim();
+            
+            // Get metadata
+            const wordMatch = bodyText.match(/Word Count:\s*(\d+)/);
+            const dateMatch = bodyText.match(/Article Date:\s*([A-Za-z]+\s+\d{4})/);
+            
+            return {
+                blocked: false,
+                title,
+                content,
+                contentLength: content.length,
+                wordCount: wordMatch ? parseInt(wordMatch[1]) : null,
+                articleDate: dateMatch ? dateMatch[1] : null,
+                url: window.location.href
+            };
+        });
+        
+        if (data.blocked) {
+            console.log('   ❌ Blocked');
+            continue;
+        }
+        
+        console.log(`   ✅ ${data.contentLength} chars`);
+        
+        await Actor.pushData({
+            ...data,
+            originalUrl: article.url,
+            scrapedAt: new Date().toISOString(),
+            articleNumber: i + 1
+        });
+        
+        articlesScraped++;
+        await delay(1500);
+    }
     
 } catch (err) {
     console.error('Error:', err.message);
@@ -92,4 +121,5 @@ try {
     await browser.close();
 }
 
+console.log(`\n✅ Done! Scraped ${articlesScraped} articles`);
 await Actor.exit();
