@@ -8,16 +8,14 @@ const {
     username, 
     password, 
     maxArticles = 50,
-    startUrl = 'https://bradfordtaxinstitute.com/Readers/tr_MonthList.aspx',
+    startUrl = 'https://bradfordtaxinstitute.com/Readers/Issue-12-01-2025.aspx',
     debug = true
 } = input;
 
-// Helper function to replace deprecated waitForTimeout
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 console.log('🚀 Starting Bradford Tax Institute Scraper');
 console.log(`📊 Target: ${maxArticles} articles max`);
-console.log(`🔧 Debug mode: ${debug}`);
 
 let articlesScraped = 0;
 
@@ -27,57 +25,25 @@ const browser = await puppeteer.launch({
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage',
-        '--disable-blink-features=AutomationControlled',
-        '--disable-web-security',
-        '--disable-features=IsolateOrigins,site-per-process'
+        '--disable-blink-features=AutomationControlled'
     ]
 });
 
 const page = await browser.newPage();
 
-// Enhanced stealth settings
 await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
 await page.setViewport({ width: 1920, height: 1080 });
 
-// Set extra headers to appear more legitimate
-await page.setExtraHTTPHeaders({
-    'Accept-Language': 'en-US,en;q=0.9',
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8'
-});
-
-// Intercept and log requests for debugging
-if (debug) {
-    page.on('response', response => {
-        const status = response.status();
-        if (status >= 400) {
-            console.log(`   ⚠️ HTTP ${status}: ${response.url().substring(0, 80)}`);
-        }
-    });
-}
-
-// Helper to save debug screenshot
-async function saveDebugScreenshot(name) {
+async function saveDebug(name) {
     if (!debug) return;
     try {
         const screenshot = await page.screenshot({ fullPage: true });
-        const key = `debug-${name}-${Date.now()}.png`;
-        await Actor.setValue(key, screenshot, { contentType: 'image/png' });
-        console.log(`   📸 Screenshot saved: ${key}`);
-    } catch (e) {
-        console.log(`   ⚠️ Could not save screenshot: ${e.message}`);
-    }
-}
-
-// Helper to save page HTML for debugging
-async function saveDebugHtml(name) {
-    if (!debug) return;
-    try {
+        await Actor.setValue(`debug-${name}-screenshot`, screenshot, { contentType: 'image/png' });
         const html = await page.content();
-        const key = `debug-${name}-${Date.now()}.html`;
-        await Actor.setValue(key, html, { contentType: 'text/html' });
-        console.log(`   📄 HTML saved: ${key}`);
+        await Actor.setValue(`debug-${name}-html`, html, { contentType: 'text/html' });
+        console.log(`   📸 Debug saved: ${name}`);
     } catch (e) {
-        console.log(`   ⚠️ Could not save HTML: ${e.message}`);
+        console.log(`   ⚠️ Debug save failed: ${e.message}`);
     }
 }
 
@@ -92,89 +58,27 @@ try {
         timeout: 30000
     });
     
-    await saveDebugScreenshot('01-login-page');
+    await page.waitForSelector('#ContentPlaceHolder1_txtUserName', { timeout: 10000 });
     
-    // Wait for login form
-    try {
-        await page.waitForSelector('#ContentPlaceHolder1_txtUserName', { timeout: 10000 });
-    } catch (e) {
-        console.log('   ⚠️ Login form not found with expected selector');
-        await saveDebugHtml('01-login-page-missing-form');
-        
-        // Try alternative selectors
-        const altSelectors = ['input[name*="UserName"]', 'input[type="text"]', '#txtUserName'];
-        for (const sel of altSelectors) {
-            const found = await page.$(sel);
-            if (found) {
-                console.log(`   Found alternative selector: ${sel}`);
-                break;
-            }
-        }
-    }
-    
-    console.log('   Filling credentials...');
-    
-    // Clear fields first, then type slowly (more human-like)
     const usernameField = await page.$('#ContentPlaceHolder1_txtUserName');
     const passwordField = await page.$('#ContentPlaceHolder1_txtUserPass');
     
-    if (usernameField && passwordField) {
-        await usernameField.click({ clickCount: 3 }); // Select all
-        await usernameField.type(username, { delay: 50 });
-        
-        await passwordField.click({ clickCount: 3 });
-        await passwordField.type(password, { delay: 50 });
-    } else {
-        throw new Error('Could not find username/password fields');
-    }
+    await usernameField.click({ clickCount: 3 });
+    await usernameField.type(username, { delay: 50 });
+    await passwordField.click({ clickCount: 3 });
+    await passwordField.type(password, { delay: 50 });
     
-    await saveDebugScreenshot('02-credentials-filled');
-    
-    console.log('   Submitting login...');
-    
-    // Click login and wait for navigation
     await Promise.all([
         page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => null),
         page.click('#ContentPlaceHolder1_cmdLogin')
     ]);
     
     await delay(3000);
-    await saveDebugScreenshot('03-after-login');
     
-    // Get all cookies to verify login
-    const cookies = await page.cookies();
-    console.log(`   Cookies set: ${cookies.length}`);
-    if (debug) {
-        cookies.forEach(c => console.log(`     - ${c.name}: ${c.value.substring(0, 20)}...`));
-    }
-    
-    // Verify login succeeded
-    const loginCheck = await page.evaluate(() => {
-        const hasLoginForm = !!document.querySelector('#ContentPlaceHolder1_txtUserName');
-        const bodyText = document.body.innerText;
-        const hasErrorMessage = bodyText.toLowerCase().includes('invalid') || 
-                               bodyText.toLowerCase().includes('incorrect') ||
-                               bodyText.toLowerCase().includes('failed');
-        return {
-            hasLoginForm,
-            hasErrorMessage,
-            url: window.location.href,
-            bodyPreview: bodyText.substring(0, 500)
-        };
-    });
-    
-    console.log(`   Current URL: ${loginCheck.url}`);
-    
-    if (loginCheck.hasLoginForm) {
-        console.log(`   ❌ Still on login page!`);
-        console.log(`   Page text: ${loginCheck.bodyPreview}`);
-        await saveDebugHtml('03-login-failed');
-        throw new Error('Login failed - still seeing login form. Check credentials.');
-    }
-    
-    if (loginCheck.hasErrorMessage) {
-        console.log(`   ❌ Login error detected`);
-        throw new Error('Login failed - error message on page');
+    const stillOnLogin = await page.$('#ContentPlaceHolder1_txtUserName');
+    if (stillOnLogin) {
+        await saveDebug('login-failed');
+        throw new Error('Login failed - check credentials');
     }
     
     console.log('✅ Login successful!\n');
@@ -191,49 +95,11 @@ try {
     });
     
     await delay(2000);
-    await saveDebugScreenshot('04-article-list');
-    await saveDebugHtml('04-article-list');
-    
-    // Check page state
-    const listPageCheck = await page.evaluate(() => {
-        const bodyText = document.body.innerText;
-        const links = Array.from(document.querySelectorAll('a')).map(a => ({
-            href: a.href,
-            text: a.textContent.trim().substring(0, 100)
-        }));
-        
-        return {
-            url: window.location.href,
-            title: document.title,
-            bodyLength: bodyText.length,
-            linkCount: links.length,
-            sampleLinks: links.slice(0, 20),
-            hasAccessDenied: bodyText.toLowerCase().includes('access denied') ||
-                            bodyText.toLowerCase().includes('not authorized') ||
-                            bodyText.toLowerCase().includes('subscription'),
-            bodyPreview: bodyText.substring(0, 1000)
-        };
-    });
-    
-    console.log(`   Page title: ${listPageCheck.title}`);
-    console.log(`   Total links on page: ${listPageCheck.linkCount}`);
-    console.log(`   Body length: ${listPageCheck.bodyLength} chars`);
-    
-    if (listPageCheck.hasAccessDenied) {
-        console.log('   ⚠️ Access denied message detected!');
-        console.log(`   Preview: ${listPageCheck.bodyPreview.substring(0, 300)}`);
-    }
-    
-    // Log sample links for debugging
-    if (debug) {
-        console.log(`   Sample links found:`);
-        listPageCheck.sampleLinks.slice(0, 10).forEach((link, i) => {
-            console.log(`     ${i + 1}. ${link.text.substring(0, 50)} -> ${link.href.substring(0, 60)}`);
-        });
-    }
+    await saveDebug('article-list');
     
     // ========================================
     // STEP 3: EXTRACT ARTICLE LINKS
+    // The key pattern is: /Content/*.aspx
     // ========================================
     console.log(`\n🔍 Step 3: Finding article links...`);
     
@@ -245,33 +111,12 @@ try {
             const href = link.href;
             const text = link.textContent.trim();
             
-            if (!href || !text || text.length < 10) continue;
-            
-            // Bradford Tax Institute article patterns
-            const isArticle = 
-                href.includes('/Content/') ||
-                href.includes('/Content_Premium/') ||
-                href.includes('/Readers/') ||
-                href.includes('Article') ||
-                href.includes('.aspx') && (
-                    text.match(/\d{1,2}\/\d{1,2}\/\d{2,4}/) ||  // Date pattern
-                    text.includes('Tax') ||
-                    text.includes('IRS') ||
-                    text.includes('Deduct') ||
-                    text.length > 30  // Likely article title
-                );
-            
-            // Exclude navigation links
-            const isNavigation = 
-                href.includes('Login') ||
-                href.includes('logout') ||
-                href.includes('Subscribe') ||
-                href.includes('Contact') ||
-                href.includes('About') ||
-                href.includes('javascript:') ||
-                href.includes('#') && href.indexOf('#') === href.length - 1;
-            
-            if (isArticle && !isNavigation) {
+            // THE KEY FIX: Only match /Content/ URLs (actual articles)
+            // Pattern: https://bradfordtaxinstitute.com/Content/Article-Name.aspx
+            if (href && href.includes('/Content/') && href.endsWith('.aspx')) {
+                // Skip if it's not an actual article (very short title)
+                if (text.length < 15) continue;
+                
                 links.push({
                     url: href,
                     title: text.replace(/\s+/g, ' ').trim()
@@ -292,28 +137,82 @@ try {
         return unique;
     });
     
-    console.log(`   Found ${articleLinks.length} potential article links`);
+    console.log(`   Found ${articleLinks.length} articles in /Content/`);
     
     if (articleLinks.length === 0) {
-        console.log('   ❌ No articles found!');
-        console.log('   This could mean:');
-        console.log('     1. Session/login not persisting');
-        console.log('     2. Subscription does not include this content');
-        console.log('     3. Page structure is different than expected');
-        console.log('   Check the debug screenshots and HTML in Key-Value Store');
+        console.log('\n   ⚠️ No /Content/ articles found on this page.');
+        console.log('   This might be a list page. Looking for issue links...\n');
         
-        // Save current page state
-        await saveDebugHtml('05-no-articles-found');
-        await saveDebugScreenshot('05-no-articles-found');
+        // Maybe we're on a month list page - find issue links
+        const issueLinks = await page.evaluate(() => {
+            const links = [];
+            const allLinks = document.querySelectorAll('a');
+            
+            for (const link of allLinks) {
+                const href = link.href;
+                const text = link.textContent.trim();
+                
+                // Issue pages are like: /Readers/Issue-MM-DD-YYYY.aspx
+                if (href && href.includes('/Readers/Issue-') && href.endsWith('.aspx')) {
+                    links.push({
+                        url: href,
+                        title: text.replace(/\s+/g, ' ').trim()
+                    });
+                }
+            }
+            
+            return links.filter((item, index, self) => 
+                index === self.findIndex(t => t.url === item.url)
+            );
+        });
         
+        if (issueLinks.length > 0) {
+            console.log(`   Found ${issueLinks.length} issue pages. Navigating to first issue...`);
+            const firstIssue = issueLinks[0];
+            console.log(`   Issue: ${firstIssue.url}`);
+            
+            await page.goto(firstIssue.url, { waitUntil: 'networkidle2', timeout: 30000 });
+            await delay(2000);
+            
+            // Re-extract article links from the issue page
+            const issueArticles = await page.evaluate(() => {
+                const links = [];
+                const allLinks = document.querySelectorAll('a');
+                
+                for (const link of allLinks) {
+                    const href = link.href;
+                    const text = link.textContent.trim();
+                    
+                    if (href && href.includes('/Content/') && href.endsWith('.aspx') && text.length >= 15) {
+                        links.push({
+                            url: href,
+                            title: text.replace(/\s+/g, ' ').trim()
+                        });
+                    }
+                }
+                
+                return links.filter((item, index, self) => 
+                    index === self.findIndex(t => t.url === item.url)
+                );
+            });
+            
+            articleLinks.push(...issueArticles);
+            console.log(`   Found ${issueArticles.length} articles in this issue`);
+        }
+    }
+    
+    if (articleLinks.length === 0) {
+        await saveDebug('no-articles');
         throw new Error('No articles found - check debug files');
     }
     
-    console.log(`   First 5 articles:`);
-    articleLinks.slice(0, 5).forEach((link, i) => {
-        console.log(`     ${i + 1}. ${link.title.substring(0, 60)}`);
-        console.log(`        URL: ${link.url}`);
+    console.log(`\n   📰 Articles to scrape:`);
+    articleLinks.slice(0, 10).forEach((link, i) => {
+        console.log(`      ${i + 1}. ${link.title.substring(0, 60)}`);
     });
+    if (articleLinks.length > 10) {
+        console.log(`      ... and ${articleLinks.length - 10} more`);
+    }
     
     // ========================================
     // STEP 4: SCRAPE EACH ARTICLE
@@ -324,8 +223,7 @@ try {
     
     for (let i = 0; i < articlesToScrape.length; i++) {
         const article = articlesToScrape[i];
-        console.log(`📄 Article ${i + 1}/${articlesToScrape.length}: ${article.title.substring(0, 50)}...`);
-        console.log(`   URL: ${article.url}`);
+        console.log(`📄 [${i + 1}/${articlesToScrape.length}] ${article.title.substring(0, 55)}...`);
         
         try {
             await page.goto(article.url, {
@@ -336,78 +234,52 @@ try {
             await delay(2000);
             
             // Save first article for debugging
-            if (i === 0 && debug) {
-                await saveDebugScreenshot('06-first-article');
-                await saveDebugHtml('06-first-article');
+            if (i === 0) {
+                await saveDebug('first-article');
             }
             
-            // Check page state
+            // Check for access issues
             const pageState = await page.evaluate(() => {
                 const bodyText = document.body.innerText;
-                const bodyHtml = document.body.innerHTML;
-                
                 return {
-                    url: window.location.href,
-                    title: document.title,
-                    bodyLength: bodyText.length,
                     hasLoginForm: !!document.querySelector('input[type="password"]'),
                     hasAccessDenied: bodyText.toLowerCase().includes('access denied') ||
-                                    bodyText.toLowerCase().includes('please login') ||
+                                    bodyText.toLowerCase().includes('please log in') ||
                                     bodyText.toLowerCase().includes('subscription required'),
-                    bodyPreview: bodyText.substring(0, 300)
+                    bodyLength: bodyText.length
                 };
             });
             
-            // Check for session issues
             if (pageState.hasLoginForm) {
-                console.log(`   🔴 Session expired - login form detected`);
-                console.log(`   Attempting to re-login...`);
-                
-                // TODO: Could implement re-login logic here
-                await saveDebugScreenshot(`error-session-expired-${i}`);
+                console.log(`   🔴 Session expired`);
                 continue;
             }
             
             if (pageState.hasAccessDenied) {
-                console.log(`   🔴 Access denied for this article`);
-                console.log(`   Preview: ${pageState.bodyPreview}`);
+                console.log(`   🔴 Access denied`);
                 continue;
             }
             
-            if (pageState.bodyLength < 100) {
-                console.log(`   🔴 Page appears empty (${pageState.bodyLength} chars)`);
-                console.log(`   Preview: ${pageState.bodyPreview}`);
-                await saveDebugScreenshot(`error-empty-page-${i}`);
-                continue;
-            }
-            
-            // Extract article content with multiple strategies
+            // Extract article content
             const articleData = await page.evaluate(() => {
-                // Strategy 1: Look for main content containers
+                // Bradford Tax Institute uses ContentPlaceHolder1 for main content
                 const contentSelectors = [
                     '#ContentPlaceHolder1_lblArticle',
                     '#ContentPlaceHolder1_pnlArticle',
                     '#ContentPlaceHolder1',
                     '.article-content',
-                    '.article-body',
-                    '#article-content',
-                    '#article',
                     'article',
-                    '.content-main',
-                    '.main-content',
-                    '[class*="article"]',
-                    '[id*="article"]',
                     'main'
                 ];
                 
                 let content = '';
-                let contentSource = 'fallback';
+                let contentSource = '';
                 
                 for (const selector of contentSelectors) {
-                    const element = document.querySelector(selector);
-                    if (element) {
-                        const text = element.innerText.trim();
-                        if (text.length > 200) {
+                    const el = document.querySelector(selector);
+                    if (el) {
+                        const text = el.innerText.trim();
+                        if (text.length > 300) {
                             content = text;
                             contentSource = selector;
                             break;
@@ -415,116 +287,75 @@ try {
                     }
                 }
                 
-                // Fallback: Get largest text block
-                if (content.length < 200) {
-                    const allDivs = document.querySelectorAll('div, section, article');
-                    let maxLength = 0;
-                    
-                    for (const div of allDivs) {
-                        const text = div.innerText.trim();
-                        if (text.length > maxLength && text.length < 50000) {
-                            // Avoid getting the entire body
-                            const childDivs = div.querySelectorAll('div').length;
-                            if (childDivs < 20) { // Not too nested
-                                maxLength = text.length;
-                                content = text;
-                                contentSource = 'largest-block';
-                            }
-                        }
-                    }
-                }
-                
-                // Final fallback: Clean body text
-                if (content.length < 200) {
+                // Fallback: clean body
+                if (content.length < 300) {
                     const clone = document.body.cloneNode(true);
-                    const remove = clone.querySelectorAll('nav, header, footer, script, style, aside, .sidebar, .menu, .nav');
-                    remove.forEach(el => el.remove());
+                    clone.querySelectorAll('nav, header, footer, script, style, aside, .sidebar, #menu, .menu').forEach(el => el.remove());
                     content = clone.innerText.trim();
-                    contentSource = 'cleaned-body';
+                    contentSource = 'body-cleaned';
                 }
                 
-                // Extract title
-                const titleSelectors = [
-                    'h1',
-                    '.article-title',
-                    '#ContentPlaceHolder1_lblTitle',
-                    '[class*="title"]',
-                    'title'
-                ];
+                // Get title from H1
+                const h1 = document.querySelector('h1');
+                const title = h1 ? h1.innerText.trim() : document.title.split(' - ')[0].trim();
                 
-                let title = '';
-                for (const sel of titleSelectors) {
-                    const el = document.querySelector(sel);
-                    if (el && el.innerText.trim().length > 5) {
-                        title = el.innerText.trim();
+                // Get date from page
+                const dateMatch = document.body.innerText.match(/(\d{1,2}[-\/]\d{1,2}[-\/]\d{2,4})/);
+                
+                // Get description (first paragraph after title)
+                const paragraphs = document.querySelectorAll('p');
+                let description = '';
+                for (const p of paragraphs) {
+                    const text = p.innerText.trim();
+                    if (text.length > 50 && text.length < 500) {
+                        description = text;
                         break;
                     }
                 }
                 
-                // Extract date if present
-                const datePatterns = document.body.innerText.match(/\d{1,2}\/\d{1,2}\/\d{2,4}/);
-                const articleDate = datePatterns ? datePatterns[0] : null;
-                
                 return {
-                    title: title || document.title,
+                    title,
+                    description,
                     content,
                     contentSource,
                     contentLength: content.length,
-                    url: window.location.href,
-                    articleDate,
-                    pageTitle: document.title
+                    articleDate: dateMatch ? dateMatch[1] : null,
+                    url: window.location.href
                 };
             });
             
-            console.log(`   Content extracted: ${articleData.contentLength} chars (via ${articleData.contentSource})`);
+            console.log(`   ✅ ${articleData.contentLength} chars (${articleData.contentSource})`);
             
-            if (articleData.contentLength < 100) {
-                console.log(`   ⚠️ Very short content - may be blocked or empty`);
-                console.log(`   Preview: ${articleData.content.substring(0, 200)}`);
-                
-                // Save anyway with flag
-                await Actor.pushData({
-                    ...articleData,
-                    status: 'possibly-incomplete',
-                    scrapedAt: new Date().toISOString(),
-                    articleNumber: i + 1
-                });
-            } else {
-                await Actor.pushData({
-                    ...articleData,
-                    status: 'success',
-                    scrapedAt: new Date().toISOString(),
-                    articleNumber: i + 1
-                });
-                
-                articlesScraped++;
-                console.log(`   ✅ Saved (${articlesScraped}/${maxArticles})\n`);
-            }
+            await Actor.pushData({
+                ...articleData,
+                originalTitle: article.title,
+                status: articleData.contentLength > 300 ? 'success' : 'short',
+                scrapedAt: new Date().toISOString(),
+                articleNumber: i + 1
+            });
+            
+            articlesScraped++;
             
             // Respectful delay
             await delay(1500 + Math.random() * 1000);
             
         } catch (error) {
-            console.error(`   ❌ Error: ${error.message}\n`);
-            await saveDebugScreenshot(`error-article-${i}`);
+            console.error(`   ❌ Error: ${error.message}`);
             continue;
         }
     }
     
 } catch (error) {
     console.error(`\n❌ Fatal error: ${error.message}`);
-    console.error(error.stack);
-    await saveDebugScreenshot('fatal-error');
-    await saveDebugHtml('fatal-error');
+    await saveDebug('fatal-error');
     throw error;
 } finally {
     await browser.close();
 }
 
-console.log('\n\n📊 ===== SCRAPING COMPLETE =====');
-console.log(`✅ Articles scraped: ${articlesScraped}`);
+console.log('\n📊 ===== COMPLETE =====');
+console.log(`✅ Scraped: ${articlesScraped} articles`);
 console.log(`🎯 Target: ${maxArticles}`);
-console.log(`📁 Check Key-Value Store for debug screenshots/HTML`);
-console.log('===============================\n');
+console.log('=======================\n');
 
 await Actor.exit();
