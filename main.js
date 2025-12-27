@@ -4,7 +4,7 @@ import puppeteer from 'puppeteer';
 await Actor.init();
 
 const input = await Actor.getInput();
-const { username, password, maxArticles = 3 } = input;
+const { username, password } = input;
 
 const browser = await puppeteer.launch({
     headless: true,
@@ -17,15 +17,9 @@ await page.setViewport({ width: 1920, height: 1080 });
 
 const delay = ms => new Promise(r => setTimeout(r, ms));
 
-async function debug(name) {
-    const screenshot = await page.screenshot({ fullPage: true });
-    await Actor.setValue(`${name}.png`, screenshot, { contentType: 'image/png' });
-    console.log(`📸 Saved: ${name}.png`);
-}
-
 try {
     // 1. LOGIN
-    console.log('\n=== STEP 1: LOGIN ===');
+    console.log('Logging in...');
     await page.goto('https://bradfordtaxinstitute.com/EMS_Utilities/EMS_Login_NoSub.aspx', { waitUntil: 'networkidle2' });
     
     await page.type('#ContentPlaceHolder1_txtUserName', username);
@@ -36,100 +30,64 @@ try {
         page.click('#ContentPlaceHolder1_cmdLogin')
     ]);
     await delay(2000);
-    console.log('Login done, URL:', page.url());
+    console.log('Login done');
     
-    // 2. GO TO ARTICLE LIST
-    console.log('\n=== STEP 2: ARTICLE LIST ===');
-    await page.goto('https://bradfordtaxinstitute.com/Readers/Issue-12-01-2025.aspx', { waitUntil: 'networkidle2' });
-    await delay(2000);
+    // 2. GO TO ONE ARTICLE
+    console.log('\nGoing to article...');
+    await page.goto('https://bradfordtaxinstitute.com/Content/Form-1099-DA-Is-Here-How-It-Will-Impact-Your-Crypto-Taxes.aspx', { waitUntil: 'networkidle2' });
+    await delay(3000);
     
-    // Get articles
-    const articles = await page.evaluate(() => {
-        return Array.from(document.querySelectorAll('a'))
-            .filter(a => a.href.includes('/Content/') && a.href.endsWith('.aspx'))
-            .map(a => ({ url: a.href, title: a.textContent.trim() }))
-            .filter(a => a.title.length > 20)
-            .slice(0, 10);
-    });
+    // Screenshot
+    const screenshot = await page.screenshot({ fullPage: true });
+    await Actor.setValue('article.png', screenshot, { contentType: 'image/png' });
+    console.log('Screenshot saved');
     
-    console.log(`Found ${articles.length} articles`);
+    // Try different ways to get content
+    console.log('\n--- Testing content extraction ---\n');
     
-    // 3. SCRAPE ARTICLES - DEBUG EACH ONE
-    console.log('\n=== STEP 3: SCRAPING ===');
+    // Method 1: page.content()
+    const html = await page.content();
+    console.log('1. page.content() length:', html.length);
+    console.log('   First 200 chars:', html.slice(0, 200));
     
-    const toScrape = articles.slice(0, maxArticles);
-    
-    for (let i = 0; i < toScrape.length; i++) {
-        const article = toScrape[i];
-        console.log(`\n--- Article ${i + 1}: ${article.title.slice(0, 40)}... ---`);
-        console.log('URL:', article.url);
-        
-        // Navigate using goto (session works per your screenshot)
-        await page.goto(article.url, { waitUntil: 'networkidle2' });
-        await delay(2000);
-        
-        // Screenshot EVERY article
-        await debug(`article-${i + 1}`);
-        
-        // Debug: Check what content is available in different selectors
-        const debugInfo = await page.evaluate(() => {
-            const selectors = [
-                '#ContentPlaceHolder1',
-                '#ContentPlaceHolder1_lblArticle',
-                '#ContentPlaceHolder1_pnlArticle',
-                'article',
-                '.article-content',
-                'main',
-                'body'
-            ];
-            
-            const results = {};
-            for (const sel of selectors) {
-                const el = document.querySelector(sel);
-                if (el) {
-                    results[sel] = {
-                        exists: true,
-                        textLength: el.innerText.trim().length,
-                        preview: el.innerText.trim().slice(0, 100)
-                    };
-                } else {
-                    results[sel] = { exists: false };
-                }
-            }
-            
-            // Also get all element IDs on the page
-            const allIds = Array.from(document.querySelectorAll('[id]'))
-                .map(el => el.id)
-                .filter(id => id.toLowerCase().includes('content') || id.toLowerCase().includes('article'))
-                .slice(0, 20);
-            
-            return { selectors: results, relevantIds: allIds };
-        });
-        
-        console.log('\nSelector debug:');
-        for (const [sel, info] of Object.entries(debugInfo.selectors)) {
-            if (info.exists) {
-                console.log(`  ${sel}: ${info.textLength} chars - "${info.preview.slice(0, 50)}..."`);
-            } else {
-                console.log(`  ${sel}: NOT FOUND`);
-            }
-        }
-        
-        console.log('\nRelevant IDs on page:', debugInfo.relevantIds.join(', '));
-        
-        // Check if blocked
-        const isBlocked = await page.evaluate(() => 
-            document.body.innerText.includes('Log in to view full article')
-        );
-        console.log('Blocked:', isBlocked);
+    // Method 2: Simple evaluate
+    const bodyText = await page.evaluate(() => document.body.innerText);
+    console.log('\n2. document.body.innerText length:', bodyText ? bodyText.length : 'NULL');
+    if (bodyText) {
+        console.log('   First 200 chars:', bodyText.slice(0, 200));
     }
     
-    console.log('\n=== DONE ===');
-    console.log('Check the screenshots in Key-Value Store to see what content is available');
+    // Method 3: Check if in iframe
+    const frames = page.frames();
+    console.log('\n3. Number of frames:', frames.length);
+    for (let i = 0; i < frames.length; i++) {
+        const frame = frames[i];
+        console.log(`   Frame ${i}: ${frame.url()}`);
+        try {
+            const frameContent = await frame.evaluate(() => document.body?.innerText?.slice(0, 100));
+            console.log(`   Content: ${frameContent}`);
+        } catch (e) {
+            console.log(`   Error: ${e.message}`);
+        }
+    }
+    
+    // Method 4: $eval
+    try {
+        const bodyText2 = await page.$eval('body', el => el.innerText);
+        console.log('\n4. $eval body length:', bodyText2.length);
+        console.log('   First 200 chars:', bodyText2.slice(0, 200));
+    } catch (e) {
+        console.log('\n4. $eval error:', e.message);
+    }
+    
+    // Method 5: Get all text nodes
+    const allText = await page.evaluate(() => {
+        return document.documentElement.outerHTML.slice(0, 500);
+    });
+    console.log('\n5. documentElement HTML (first 500):', allText);
     
 } catch (err) {
     console.error('Error:', err.message);
-    await debug('error');
 } finally {
     await browser.close();
 }
