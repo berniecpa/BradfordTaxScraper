@@ -4,11 +4,11 @@ import puppeteer from 'puppeteer';
 await Actor.init();
 
 const input = await Actor.getInput();
-const { username, password, maxArticles = 50, issueUrl } = input;
+const { username, password, maxArticles = 50, startUrl } = input;
 
-if (!issueUrl) {
-    console.error('❌ Error: issueUrl is required in input');
-    console.log('Example: { "issueUrl": "https://bradfordtaxinstitute.com/Readers/Issue-12-01-2025.aspx" }');
+if (!startUrl) {
+    console.error('❌ Error: startUrl is required in input');
+    console.log('Example: { "startUrl": "https://bradfordtaxinstitute.com/Readers/Issue-12-01-2025.aspx" }');
     await Actor.exit(1);
 }
 
@@ -40,8 +40,8 @@ try {
     console.log('âœ… Login done\n');
     
     // 2. GET ARTICLE LIST
-    console.log('ðŸ“‹ Getting article list...');
-    await page.goto(issueUrl, { waitUntil: 'networkidle2' });
+    console.log('ðŸ“‹ Getting article list from:', startUrl);
+    await page.goto(startUrl, { waitUntil: 'networkidle2' });
     await delay(2000);
     
     const articles = await page.evaluate(() => {
