@@ -4,7 +4,13 @@ import puppeteer from 'puppeteer';
 await Actor.init();
 
 const input = await Actor.getInput();
-const { username, password, maxArticles = 50 } = input;
+const { username, password, maxArticles = 50, issueUrl } = input;
+
+if (!issueUrl) {
+    console.error('❌ Error: issueUrl is required in input');
+    console.log('Example: { "issueUrl": "https://bradfordtaxinstitute.com/Readers/Issue-12-01-2025.aspx" }');
+    await Actor.exit(1);
+}
 
 const browser = await puppeteer.launch({
     headless: true,
@@ -20,7 +26,7 @@ let articlesScraped = 0;
 
 try {
     // 1. LOGIN
-    console.log('🔐 Logging in...');
+    console.log('ðŸ” Logging in...');
     await page.goto('https://bradfordtaxinstitute.com/EMS_Utilities/EMS_Login_NoSub.aspx', { waitUntil: 'networkidle2' });
     
     await page.type('#ContentPlaceHolder1_txtUserName', username);
@@ -31,11 +37,11 @@ try {
         page.click('#ContentPlaceHolder1_cmdLogin')
     ]);
     await delay(2000);
-    console.log('✅ Login done\n');
+    console.log('âœ… Login done\n');
     
     // 2. GET ARTICLE LIST
-    console.log('📋 Getting article list...');
-    await page.goto('https://bradfordtaxinstitute.com/Readers/Issue-12-01-2025.aspx', { waitUntil: 'networkidle2' });
+    console.log('ðŸ“‹ Getting article list...');
+    await page.goto(issueUrl, { waitUntil: 'networkidle2' });
     await delay(2000);
     
     const articles = await page.evaluate(() => {
@@ -53,7 +59,7 @@ try {
     
     for (let i = 0; i < toScrape.length; i++) {
         const article = toScrape[i];
-        console.log(`📄 [${i + 1}/${toScrape.length}] ${article.title.slice(0, 50)}...`);
+        console.log(`ðŸ“„ [${i + 1}/${toScrape.length}] ${article.title.slice(0, 50)}...`);
         
         await page.goto(article.url, { waitUntil: 'networkidle2' });
         await delay(2000);
@@ -63,7 +69,7 @@ try {
         const contentFrame = frames.find(f => f.url().includes('EMS_Viewer'));
         
         if (!contentFrame) {
-            console.log('   ❌ Content frame not found');
+            console.log('   âŒ Content frame not found');
             continue;
         }
         
@@ -152,11 +158,11 @@ try {
         });
         
         if (data.blocked) {
-            console.log('   ❌ Blocked');
+            console.log('   âŒ Blocked');
             continue;
         }
         
-        console.log(`   ✅ ${data.contentLength} chars`);
+        console.log(`   âœ… ${data.contentLength} chars`);
         
         await Actor.pushData({
             ...data,
@@ -175,5 +181,5 @@ try {
     await browser.close();
 }
 
-console.log(`\n✅ Done! Scraped ${articlesScraped} articles`);
+console.log(`\nâœ… Done! Scraped ${articlesScraped} articles`);
 await Actor.exit();
